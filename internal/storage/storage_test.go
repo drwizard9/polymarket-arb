@@ -97,20 +97,18 @@ func TestPostgresStorage_StoreOpportunity(t *testing.T) {
 	opp := arbitrage.CreateTestOpportunity("market-123", "test-market")
 	ctx := context.Background()
 
-	// Expect INSERT query with new Outcomes structure
-	// Postgres storage extracts first 2 outcomes for backward compatibility
 	mock.ExpectExec("INSERT INTO arbitrage_opportunities").
 		WithArgs(
 			opp.ID,
 			opp.MarketID,
 			opp.MarketSlug,
 			opp.MarketQuestion,
-			sqlmock.AnyArg(), // DetectedAt (time.Time is tricky)
-			opp.Outcomes[0].AskPrice,  // yes_ask_price
-			opp.Outcomes[0].AskSize,   // yes_ask_size
-			opp.Outcomes[1].AskPrice,  // no_ask_price
-			opp.Outcomes[1].AskSize,   // no_ask_size
-			opp.TotalPriceSum,         // price_sum
+			sqlmock.AnyArg(), // DetectedAt
+			opp.Outcomes[0].AskPrice,
+			opp.Outcomes[0].AskSize,
+			opp.Outcomes[1].AskPrice,
+			opp.Outcomes[1].AskSize,
+			opp.TotalPriceSum,
 			opp.ProfitMargin,
 			opp.ProfitBPS,
 			opp.MaxTradeSize,
@@ -119,6 +117,7 @@ func TestPostgresStorage_StoreOpportunity(t *testing.T) {
 			opp.NetProfit,
 			opp.NetProfitBPS,
 			opp.ConfigMaxPriceSum,
+			sqlmock.AnyArg(), // outcomes_json
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -151,7 +150,6 @@ func TestPostgresStorage_StoreOpportunity_Error(t *testing.T) {
 	opp := arbitrage.CreateTestOpportunity("market-123", "test-market")
 	ctx := context.Background()
 
-	// Expect INSERT query to fail
 	mock.ExpectExec("INSERT INTO arbitrage_opportunities").
 		WithArgs(
 			opp.ID,
@@ -159,11 +157,11 @@ func TestPostgresStorage_StoreOpportunity_Error(t *testing.T) {
 			opp.MarketSlug,
 			opp.MarketQuestion,
 			sqlmock.AnyArg(),
-			opp.Outcomes[0].AskPrice,  // yes_ask_price
-			opp.Outcomes[0].AskSize,   // yes_ask_size
-			opp.Outcomes[1].AskPrice,  // no_ask_price
-			opp.Outcomes[1].AskSize,   // no_ask_size
-			opp.TotalPriceSum,         // price_sum
+			opp.Outcomes[0].AskPrice,
+			opp.Outcomes[0].AskSize,
+			opp.Outcomes[1].AskPrice,
+			opp.Outcomes[1].AskSize,
+			opp.TotalPriceSum,
 			opp.ProfitMargin,
 			opp.ProfitBPS,
 			opp.MaxTradeSize,
@@ -172,6 +170,7 @@ func TestPostgresStorage_StoreOpportunity_Error(t *testing.T) {
 			opp.NetProfit,
 			opp.NetProfitBPS,
 			opp.ConfigMaxPriceSum,
+			sqlmock.AnyArg(), // outcomes_json
 		).
 		WillReturnError(sqlmock.ErrCancelled)
 
@@ -268,7 +267,7 @@ func TestPostgresStorage_QueryStructure(t *testing.T) {
 	opp := arbitrage.CreateTestOpportunity("market-123", "test-market")
 	ctx := context.Background()
 
-	// Expect INSERT with exact parameter count (18 parameters)
+	// Expect INSERT with exact parameter count (19 parameters, including outcomes_json)
 	mock.ExpectExec("INSERT INTO arbitrage_opportunities").
 		WithArgs(
 			sqlmock.AnyArg(), // 1: ID
@@ -289,6 +288,7 @@ func TestPostgresStorage_QueryStructure(t *testing.T) {
 			sqlmock.AnyArg(), // 16: NetProfit
 			sqlmock.AnyArg(), // 17: NetProfitBPS
 			sqlmock.AnyArg(), // 18: ConfigThreshold
+			sqlmock.AnyArg(), // 19: outcomes_json
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 

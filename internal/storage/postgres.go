@@ -3,7 +3,9 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"time"
 
 	_ "github.com/lib/pq"
 	"github.com/mselser95/polymarket-arb/internal/arbitrage"
@@ -39,6 +41,11 @@ func NewPostgresStorage(cfg *PostgresConfig) (*PostgresStorage, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
+	// Connection pool limits — prevent connection exhaustion under load.
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
 	// Test connection
 	err = db.Ping()
 	if err != nil {
@@ -55,12 +62,36 @@ func NewPostgresStorage(cfg *PostgresConfig) (*PostgresStorage, error) {
 	}, nil
 }
 
+// outcomeRow is the per-outcome data persisted in the outcomes_json column.
+type outcomeRow struct {
+	TokenID  string  `json:"token_id"`
+	Outcome  string  `json:"outcome"`
+	AskPrice float64 `json:"ask_price"`
+	AskSize  float64 `json:"ask_size"`
+}
+
 // StoreOpportunity stores an arbitrage opportunity in PostgreSQL.
-// NOTE: Postgres schema needs migration to support multi-outcome markets properly.
-// For now, storing summary data only (no individual outcome details).
+// All outcomes are stored as JSONB in outcomes_json; the legacy binary columns
+// (yes_bid_price/no_bid_price) are populated for the first two outcomes so that
+// existing dashboards and queries remain functional.
 func (p *PostgresStorage) StoreOpportunity(ctx context.Context, opp *arbitrage.Opportunity) error {
-	// For backward compatibility with existing schema, store binary-equivalent data
-	// TODO: Migrate schema to support N outcomes with JSONB column
+	// Build outcomes JSON — captures all N outcomes without data loss.
+	rows := make([]outcomeRow, len(opp.Outcomes))
+	for i, o := range opp.Outcomes {
+		rows[i] = outcomeRow{
+			TokenID:  o.TokenID,
+			Outcome:  o.Outcome,
+			AskPrice: o.AskPrice,
+			AskSize:  o.AskSize,
+		}
+	}
+
+	outcomesJSON, err := json.Marshal(rows)
+	if err != nil {
+		return fmt.Errorf("marshal outcomes: %w", err)
+	}
+
+	// Backward-compatible values for the legacy binary columns.
 	var firstPrice, secondPrice, firstSize, secondSize float64
 	if len(opp.Outcomes) >= 2 {
 		firstPrice = opp.Outcomes[0].AskPrice
@@ -75,22 +106,22 @@ func (p *PostgresStorage) StoreOpportunity(ctx context.Context, opp *arbitrage.O
 			yes_bid_price, yes_bid_size, no_bid_price, no_bid_size,
 			price_sum, profit_margin, profit_bps, max_trade_size,
 			estimated_profit, total_fees, net_profit, net_profit_bps,
-			config_threshold
+			config_threshold, outcomes_json
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
 		)
 	`
 
-	_, err := p.db.ExecContext(ctx, query,
+	_, err = p.db.ExecContext(ctx, query,
 		opp.ID,
 		opp.MarketID,
 		opp.MarketSlug,
 		opp.MarketQuestion,
 		opp.DetectedAt,
-		firstPrice,  // Reuse yes_bid_price column for first outcome
-		firstSize,   // Reuse yes_bid_size column for first outcome
-		secondPrice, // Reuse no_bid_price column for second outcome
-		secondSize,  // Reuse no_bid_size column for second outcome
+		firstPrice,
+		firstSize,
+		secondPrice,
+		secondSize,
 		opp.TotalPriceSum,
 		opp.ProfitMargin,
 		opp.ProfitBPS,
@@ -100,6 +131,7 @@ func (p *PostgresStorage) StoreOpportunity(ctx context.Context, opp *arbitrage.O
 		opp.NetProfit,
 		opp.NetProfitBPS,
 		opp.ConfigMaxPriceSum,
+		outcomesJSON,
 	)
 
 	if err != nil {
