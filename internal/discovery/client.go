@@ -222,8 +222,16 @@ func (c *Client) fetchWithPagination(ctx context.Context, limit int, offset int,
 // Note: The Gamma API doesn't support /markets/{slug}, only /markets/{id}.
 // This function searches through both active and closed markets lists to find the matching slug.
 func (c *Client) FetchMarketBySlug(ctx context.Context, slug string) (*types.Market, error) {
-	// First, try active markets (most common case)
-	market, err := c.searchMarketsBySlug(ctx, slug, false)
+	// Gamma supports direct slug filtering. Use it first so low-volume
+	// short-duration markets (for example BTC 5m/15m) are not missed by
+	// the volume-sorted fallback search.
+	market, err := c.fetchMarketBySlugDirect(ctx, slug)
+	if err == nil {
+		return market, nil
+	}
+
+	// Fallback: Search active markets (legacy behavior)
+	market, err = c.searchMarketsBySlug(ctx, slug, false)
 	if err == nil {
 		return market, nil
 	}
@@ -235,6 +243,52 @@ func (c *Client) FetchMarketBySlug(ctx context.Context, slug string) (*types.Mar
 	}
 
 	return nil, fmt.Errorf("market not found in active or closed markets: %s", slug)
+}
+
+func (c *Client) fetchMarketBySlugDirect(ctx context.Context, slug string) (*types.Market, error) {
+	endpoint := fmt.Sprintf("%s/markets", c.baseURL)
+
+	params := url.Values{}
+	params.Add("slug", slug)
+	params.Add("limit", "1")
+
+	requestURL := fmt.Sprintf("%s?%s", endpoint, params.Encode())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "polymarket-arb/1.0")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
+
+	var markets []types.Market
+	if err := json.Unmarshal(body, &markets); err != nil {
+		return nil, fmt.Errorf("unmarshal response: %w", err)
+	}
+
+	for i := range markets {
+		if markets[i].Slug == slug {
+			return &markets[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("market not found by slug: %s", slug)
 }
 
 // searchMarketsBySlug searches for a market by slug in either active or closed markets.

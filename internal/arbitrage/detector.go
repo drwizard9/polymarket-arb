@@ -302,11 +302,10 @@ func (d *Detector) detectMultiOutcome(
 
 		// Use metadata client if available, otherwise use defaults
 		if d.metadataClient != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-
+			metaCtx, metaCancel := context.WithTimeout(context.Background(), 2*time.Second)
 			var err error
-			tickSize, minSize, err = d.metadataClient.GetTokenMetadata(ctx, book.TokenID)
+			tickSize, minSize, err = d.metadataClient.GetTokenMetadata(metaCtx, book.TokenID)
+			metaCancel()
 			if err != nil {
 				d.logger.Warn("failed-to-fetch-token-metadata",
 					zap.String("token-id", book.TokenID),

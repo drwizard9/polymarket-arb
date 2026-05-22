@@ -96,8 +96,11 @@ func (s *Service) poll(ctx context.Context) error {
 		return s.pollSingleMarket(ctx)
 	}
 
-	// Fetch active markets sorted by creation date (DESC) - newest markets first
-	resp, err := s.client.FetchActiveMarkets(ctx, s.marketLimit, 0, "createdAt")
+	// Fetch active markets sorted by 24h volume (DESC) — most liquid first.
+	// endDate ascending returns already-expired markets from the Gamma API, so
+	// volume24hr is used instead. The duration filter in identifyNewMarkets then
+	// retains only markets expiring within ARB_MAX_MARKET_DURATION.
+	resp, err := s.client.FetchActiveMarkets(ctx, s.marketLimit, 0, "volume24hr")
 	if err != nil {
 		PollErrorsTotal.Inc()
 		return fmt.Errorf("fetch active markets: %w", err)
