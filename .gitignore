@@ -29,3 +29,9 @@ coverage.html
 # Temporary files
 tmp/
 temp/
+
+# Runtime market data (per-market JSON state)
+state/
+
+# Claude Code project settings (per-developer config)
+.claude/
