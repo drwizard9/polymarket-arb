@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/joho/godotenv"
 	"github.com/mselser95/polymarket-arb/internal/app"
 	"github.com/mselser95/polymarket-arb/pkg/config"
 	"github.com/spf13/cobra"
@@ -29,6 +30,10 @@ func init() {
 }
 
 func runBot(cmd *cobra.Command, args []string) error {
+	// Load .env if present. Environment variables already set by the shell
+	// still take precedence, matching godotenv.Load() behavior.
+	_ = godotenv.Load()
+
 	// Load config
 	cfg, err := config.LoadFromEnv()
 	if err != nil {

@@ -293,7 +293,7 @@ func setupExecutor(
 				Passphrase:    cfg.PolymarketPassphrase,
 				PrivateKey:    privateKey,
 				Address:       os.Getenv("POLYMARKET_ADDRESS"),
-				ProxyAddress:  "", // Empty for EOA signatures (maker == signer)
+				ProxyAddress:  os.Getenv("POLYMARKET_PROXY_ADDRESS"), // Used as maker/funder for proxy/1271 signatures
 				SignatureType: signatureType,
 				Logger:        logger,
 			}
