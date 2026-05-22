@@ -8,6 +8,11 @@ import (
 	"time"
 )
 
+// warnf prints a warning to stderr for invalid configuration values.
+func warnf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "WARN config: "+format+"\n", args...)
+}
+
 // Config holds all application configuration.
 type Config struct {
 	// Application
@@ -229,6 +234,7 @@ func getIntOrDefault(key string, defaultValue int) int {
 
 	intVal, err := strconv.Atoi(value)
 	if err != nil {
+		warnf("%s=%q is not a valid integer, using default %d", key, value, defaultValue)
 		return defaultValue
 	}
 
@@ -243,6 +249,7 @@ func getFloat64OrDefault(key string, defaultValue float64) float64 {
 
 	floatVal, err := strconv.ParseFloat(value, 64)
 	if err != nil {
+		warnf("%s=%q is not a valid float, using default %g", key, value, defaultValue)
 		return defaultValue
 	}
 
@@ -257,6 +264,7 @@ func getDurationOrDefault(key string, defaultValue time.Duration) time.Duration 
 
 	duration, err := time.ParseDuration(value)
 	if err != nil {
+		warnf("%s=%q is not a valid duration, using default %s", key, value, defaultValue)
 		return defaultValue
 	}
 
@@ -271,6 +279,7 @@ func getBoolOrDefault(key string, defaultValue bool) bool {
 
 	boolVal, err := strconv.ParseBool(value)
 	if err != nil {
+		warnf("%s=%q is not a valid bool, using default %v", key, value, defaultValue)
 		return defaultValue
 	}
 
