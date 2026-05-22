@@ -14,6 +14,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// maxFillVerificationGoroutines limits concurrent fill-verification goroutines.
+// Prevents memory exhaustion during high-frequency trading bursts.
+const maxFillVerificationGoroutines = 100
+
 // Executor executes trades for arbitrage opportunities.
 type Executor struct {
 	mode             string // "paper" or "live"
@@ -25,6 +29,7 @@ type Executor struct {
 	mu               sync.Mutex
 	orderClient      OrderPlacer // For live trading (interface)
 	circuitBreaker   *circuitbreaker.BalanceCircuitBreaker
+	fillSemaphore    chan struct{} // Bounds concurrent fill-verification goroutines
 
 	// Fill verification config
 	aggressionTicks  int
@@ -61,6 +66,7 @@ func New(cfg *Config) *Executor {
 		opportunityChan:  cfg.OpportunityChannel,
 		orderClient:      cfg.OrderClient,
 		circuitBreaker:   cfg.CircuitBreaker,
+		fillSemaphore:    make(chan struct{}, maxFillVerificationGoroutines),
 		aggressionTicks:  cfg.AggressionTicks,
 		fillTimeout:      cfg.FillTimeout,
 		fillRetryInitial: cfg.FillRetryInitial,
@@ -360,18 +366,15 @@ func (e *Executor) executeLive(opp *arbitrage.Opportunity) *types.ExecutionResul
 		zap.Float64("adjusted-ask-sum", adjustedAskSum),
 		zap.Float64("adjustment", adjustedAskSum-originalAskSum))
 
-	// Convert USD budget to token count per outcome
-	// OrderClient expects token count, but opp.MaxTradeSize is in USD
-	// Calculate how many tokens we can afford at each outcome's price
-	tokensPerOutcome := opp.MaxTradeSize / adjustedPrices[0]
-
-	// Use the lowest affordable token count across all outcomes to ensure budget compliance
+	// Convert USD budget to token count per outcome.
+	// We buy the same number of tokens for EVERY outcome, so the total cost is:
+	//   tokensPerOutcome × sum(all adjusted prices)
+	// Solving for tokensPerOutcome: budget / sum(all prices)
+	adjustedPriceSum := 0.0
 	for _, price := range adjustedPrices {
-		maxAffordable := opp.MaxTradeSize / price
-		if maxAffordable < tokensPerOutcome {
-			tokensPerOutcome = maxAffordable
-		}
+		adjustedPriceSum += price
 	}
+	tokensPerOutcome := opp.MaxTradeSize / adjustedPriceSum
 
 	// Log token calculation for verification
 	e.logger.Info("calculated-token-count",
@@ -486,8 +489,20 @@ func (e *Executor) executeLive(opp *arbitrage.Opportunity) *types.ExecutionResul
 			zap.String("note", "spawning goroutine for fill verification"),
 		}, orderLogFields...)...)
 
-	// Spawn non-blocking goroutine for fill verification and metric updates
-	go e.verifyFillsAndUpdateMetrics(orderIDs, outcomes, expectedSizes, adjustedPrices, opp, expectedProfit, now)
+	// Spawn bounded goroutine for fill verification; drop if semaphore is full
+	// to prevent memory exhaustion during high-frequency bursts.
+	select {
+	case e.fillSemaphore <- struct{}{}:
+		go func() {
+			defer func() { <-e.fillSemaphore }()
+			e.verifyFillsAndUpdateMetrics(orderIDs, outcomes, expectedSizes, adjustedPrices, opp, expectedProfit, now)
+		}()
+	default:
+		e.logger.Warn("fill-verification-skipped-semaphore-full",
+			zap.String("opportunity-id", opp.ID),
+			zap.String("market-slug", opp.MarketSlug),
+			zap.Int("max-concurrent", maxFillVerificationGoroutines))
+	}
 
 	// Return immediately with partial result (orders placed but not yet verified)
 	result := &types.ExecutionResult{
@@ -517,17 +532,17 @@ func (e *Executor) verifyFillsAndUpdateMetrics(
 	ctx, cancel := context.WithTimeout(context.Background(), e.fillTimeout+10*time.Second)
 	defer cancel()
 
-	// Create fill tracker (requires concrete OrderClient for GetOrder method)
-	// If orderClient is not a concrete *OrderClient (e.g., mock), skip fill verification
-	concreteClient, ok := e.orderClient.(*OrderClient)
+	// Require order client to support fill queries; mocks that only implement
+	// OrderPlacer (not OrderGetter) will log a warning and skip verification.
+	getter, ok := e.orderClient.(OrderGetter)
 	if !ok {
-		e.logger.Warn("skipping-fill-verification-not-concrete-client",
+		e.logger.Warn("skipping-fill-verification-client-does-not-support-get-order",
 			zap.String("opportunity-id", opp.ID))
 		return
 	}
 
 	fillTracker := NewFillTracker(
-		concreteClient,
+		getter,
 		e.logger,
 		&FillTrackerConfig{
 			InitialBackoff: e.fillRetryInitial,

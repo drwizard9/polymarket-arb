@@ -51,8 +51,15 @@ type OrderClient struct {
 	logger        *zap.Logger
 }
 
-// Compile-time check that OrderClient implements OrderPlacer
+// OrderGetter can query the status of a submitted order.
+// Separated from OrderPlacer so mocks can implement placement without fill verification.
+type OrderGetter interface {
+	GetOrder(ctx context.Context, orderID string) (*types.OrderQueryResponse, error)
+}
+
+// Compile-time checks that OrderClient implements both interfaces
 var _ OrderPlacer = (*OrderClient)(nil)
+var _ OrderGetter = (*OrderClient)(nil)
 
 // OrderClientConfig holds configuration for the order client
 type OrderClientConfig struct {
@@ -68,14 +75,14 @@ type OrderClientConfig struct {
 
 // OrderInfo represents an open order from GET /data/orders
 type OrderInfo struct {
-	OrderID      string `json:"id"`             // API uses "id" not "order_id"
-	Market       string `json:"market"`         // Market ID (conditionID)
-	Side         string `json:"side"`           // BUY/SELL
+	OrderID      string `json:"id"`     // API uses "id" not "order_id"
+	Market       string `json:"market"` // Market ID (conditionID)
+	Side         string `json:"side"`   // BUY/SELL
 	Price        string `json:"price"`
 	OriginalSize string `json:"original_size"`
-	Status       string `json:"status"`         // LIVE/RESTING
-	AssetID      string `json:"asset_id"`       // Token ID
-	Outcome      string `json:"outcome"`        // Outcome name (Yes/No/candidate name)
+	Status       string `json:"status"`   // LIVE/RESTING
+	AssetID      string `json:"asset_id"` // Token ID
+	Outcome      string `json:"outcome"`  // Outcome name (Yes/No/candidate name)
 }
 
 // OpenOrdersResponse represents the wrapper response from GET /data/orders
@@ -192,9 +199,10 @@ func (c *OrderClient) PlaceOrdersBatch(
 	noTickSize float64,
 	noMinSize float64,
 ) (yesResp *types.OrderSubmissionResponse, noResp *types.OrderSubmissionResponse, err error) {
-	// For EOA: maker and signer must be the same address
-	makerAddress := c.address
-	signerAddress := c.address
+	// For EOA, maker and signer are the same address.
+	// For proxy/1271 signatures, maker/funder is the proxy address while signer remains the EOA.
+	makerAddress := c.GetMakerAddress()
+	signerAddress := c.GetSignerAddress()
 
 	// Get rounding precision for each token
 	yesSizePrecision, yesAmountPrecision := getRoundingConfig(yesTickSize)
@@ -346,9 +354,10 @@ func (c *OrderClient) PlaceOrdersMultiOutcome(
 		return nil, fmt.Errorf("at least 2 outcomes required, got %d", len(outcomes))
 	}
 
-	// For EOA: maker and signer must be the same address
-	makerAddress := c.address
-	signerAddress := c.address
+	// For EOA, maker and signer are the same address.
+	// For proxy/1271 signatures, maker/funder is the proxy address while signer remains the EOA.
+	makerAddress := c.GetMakerAddress()
+	signerAddress := c.GetSignerAddress()
 
 	// Build signed orders for each outcome
 	batchReq := make(types.BatchOrderRequest, 0, len(outcomes))

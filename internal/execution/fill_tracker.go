@@ -11,7 +11,7 @@ import (
 
 // FillTracker verifies order fills with exponential backoff.
 type FillTracker struct {
-	orderClient    *OrderClient
+	orderClient    OrderGetter
 	logger         *zap.Logger
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
@@ -29,7 +29,7 @@ type FillTrackerConfig struct {
 
 // NewFillTracker creates a new FillTracker instance.
 func NewFillTracker(
-	orderClient *OrderClient,
+	orderClient OrderGetter,
 	logger *zap.Logger,
 	cfg *FillTrackerConfig,
 ) *FillTracker {

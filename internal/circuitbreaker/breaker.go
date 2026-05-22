@@ -185,29 +185,29 @@ func (b *BalanceCircuitBreaker) CheckBalance(ctx context.Context) (err error) {
 		big.NewFloat(1e6))
 	balance, _ := usdcFloat.Float64()
 
-	// Get current thresholds and state
-	b.mu.RLock()
+	// Hold write lock for the entire read-compare-update cycle to prevent TOCTOU
+	// between RecordTrade (which updates thresholds) and the state decision here.
+	b.mu.Lock()
 	disableThreshold := b.disableThreshold
 	enableThreshold := b.enableThreshold
-	b.mu.RUnlock()
-
 	currentlyEnabled := b.enabled.Load()
-
-	// Update last balance and check time
-	b.mu.Lock()
 	b.lastBalance = balance
 	b.lastCheck = time.Now()
-	b.mu.Unlock()
 
-	// Update balance metric
-	CircuitBreakerBalance.Set(balance)
-
-	// State transition logic with hysteresis
 	shouldDisable := currentlyEnabled && balance < disableThreshold
 	shouldEnable := !currentlyEnabled && balance >= enableThreshold
 
 	if shouldDisable {
 		b.enabled.Store(false)
+	} else if shouldEnable {
+		b.enabled.Store(true)
+	}
+	b.mu.Unlock()
+
+	// Update metrics outside the lock
+	CircuitBreakerBalance.Set(balance)
+
+	if shouldDisable {
 		CircuitBreakerEnabled.Set(0)
 		CircuitBreakerStateChanges.Inc()
 
@@ -216,7 +216,6 @@ func (b *BalanceCircuitBreaker) CheckBalance(ctx context.Context) (err error) {
 			zap.Float64("disable_threshold", disableThreshold),
 			zap.Float64("enable_threshold", enableThreshold))
 	} else if shouldEnable {
-		b.enabled.Store(true)
 		CircuitBreakerEnabled.Set(1)
 		CircuitBreakerStateChanges.Inc()
 
@@ -225,7 +224,6 @@ func (b *BalanceCircuitBreaker) CheckBalance(ctx context.Context) (err error) {
 			zap.Float64("disable_threshold", disableThreshold),
 			zap.Float64("enable_threshold", enableThreshold))
 	} else {
-		// No state change, just log current status
 		b.logger.Debug("balance-checked",
 			zap.Float64("balance", balance),
 			zap.Bool("enabled", currentlyEnabled),
