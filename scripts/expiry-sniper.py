@@ -351,10 +351,13 @@ def get_live_usdc():
 
 # ── logging setup (daily rotate, 30일 보관) ────────────────────────────────────
 def _gz_rotator(source: str, dest: str):
-    """rotate 시 gzip으로 압축 후 원본 삭제."""
+    """rotate 시 gzip으로 압축 후 원본 삭제.
+
+    2026-05-22 fix: namer 가 이미 '.gz' 를 dest 에 추가하므로 여기서 추가 X.
+    이전: dest='...gz' + '.gz' = '...gz.gz' (이중 명명 버그)
+    """
     import gzip, shutil
-    gz_path = dest + '.gz'
-    with open(source, 'rb') as f_in, gzip.open(gz_path, 'wb') as f_out:
+    with open(source, 'rb') as f_in, gzip.open(dest, 'wb') as f_out:
         shutil.copyfileobj(f_in, f_out)
     os.remove(source)
 
