@@ -61,6 +61,12 @@ MAX_CONCURRENT_BETS       = int(os.environ.get('MAX_CONCURRENT_BETS',       '2')
 CORRELATED_SAME_DIR_LIMIT = int(os.environ.get('CORRELATED_SAME_DIR_LIMIT', '1'))   # 동일 방향(Up/Down) 동시 진입 최대 (0=무제한)
 DAILY_LOSS_CAP_USD        = float(os.environ.get('DAILY_LOSS_CAP_USD',      '20.0')) # 일일 손실 도달 시 신규 진입 차단 (0=비활성, KST 자정 자동 리셋)
 
+# ── Claude probability layer + edge threshold (2026-05-24 사용자 6864 A+B) ──
+# Anthropic Polymarket 가이드 통합. CLAUDE_LAYER_ENABLED=true 시 활성.
+# Default disabled — rollback 안전 (tag pre-claude-layer-20260524).
+CLAUDE_LAYER_ENABLED = os.environ.get('CLAUDE_LAYER_ENABLED', 'false').lower() in ('1', 'true', 'yes')
+MIN_EDGE_PCT         = float(os.environ.get('MIN_EDGE_PCT', '0.05'))  # Claude estimate - ask >= 5%
+
 def coin_cfg(coin: str, key: str, default: float) -> float:
     """코인별 설정값 조회. {COIN}_{KEY} 환경변수 우선, 없으면 전역값 사용."""
     return float(os.environ.get(f"{coin.upper()}_{key}", default))
@@ -1245,6 +1251,40 @@ while True:
             bets[slug] = {'resolved': True, 'skipped': True}
             continue
         c_bet_size = bet_size
+
+        # ── Claude probability layer + edge threshold (2026-05-24 사용자 6864 A+B) ──
+        # Optional gate: Claude estimate 와 market ask 의 edge >= MIN_EDGE_PCT 일 때만 진입.
+        # Graceful: API 실패 시 (None) → 기존 로직 그대로 진행 (보수적 default).
+        if CLAUDE_LAYER_ENABLED:
+            try:
+                from claude_estimator import estimate_probability as _est
+                _bin_feat = get_binance_features(coin) if 'get_binance_features' in dir() else None
+                _claude_prob, _claude_reason = _est(
+                    slug=slug,
+                    question=m['question'],
+                    outcome=favored['outcome'],
+                    market_price=ask,
+                    coin=coin,
+                    secs_left=secs_left,
+                    binance_features=_bin_feat,
+                )
+                if _claude_prob is not None:
+                    # edge = Claude 추정 - 시장 가격 (positive = 시장이 underprice → 우리에게 유리)
+                    _edge = _claude_prob - ask
+                    if _edge < MIN_EDGE_PCT:
+                        log(f"SKIP [CLAUDE] {m['question'][:55]}\n"
+                            f"      outcome={favored['outcome']}  ask={ask:.2f}  "
+                            f"claude_prob={_claude_prob:.2f}  edge={_edge*100:+.1f}% < {MIN_EDGE_PCT*100:.0f}%")
+                        ml_save_decision(coin, interval, 'SKIP', 'claude_low_edge',
+                                         secs_left, ask, pct, direction,
+                                         get_binance_features(coin), trigger, c_min_ask)
+                        bets[slug] = {'resolved': True, 'skipped': True}
+                        continue
+                    log(f"      [CLAUDE] prob={_claude_prob:.2f}  edge={_edge*100:+.1f}%  — {_claude_reason[:80]}")
+                else:
+                    log(f"      [CLAUDE] unavailable ({_claude_reason}) — proceeding without Claude check")
+            except Exception as _claude_e:
+                log(f"      [CLAUDE] error: {_claude_e} — proceeding without Claude check")
 
         # Place order
         order_id = None
